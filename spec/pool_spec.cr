@@ -43,13 +43,23 @@ end
 class Closable
   include DB::Disposable
   property before_checkout_called : Bool = false
+  property before_release_called : Bool = false
   property after_release_called : Bool = false
 
   protected def do_close
   end
 
+  def expire!
+    @expired = true
+  end
+
   def before_checkout
     @before_checkout_called = true
+  end
+
+  def before_release
+    @before_release_called = true
+    close if @expired
   end
 
   def after_release
@@ -90,9 +100,11 @@ describe DB::Pool do
   it "should be available if returned" do
     pool = create_pool { Closable.new }
     resource = pool.checkout
+    resource.before_release_called.should be_false
     resource.after_release_called.should be_false
     pool.release resource
     pool.is_available?(resource).should be_true
+    resource.before_release_called.should be_true
     resource.after_release_called.should be_true
   end
 
@@ -205,6 +217,23 @@ describe DB::Pool do
 
     # it should not return a closed resource to the pool
     resource2.close
+    pool.release resource2
+
+    resource2 = pool.checkout
+    resource1.should_not eq resource2
+  end
+
+  it "allows resources to call `close` in before_release" do
+    pool = create_pool(max_pool_size: 1, max_idle_pool_size: 1) { Closable.new }
+
+    # pool size 1 should be reusing the one resource
+    resource1 = pool.checkout
+    pool.release resource1
+    resource2 = pool.checkout
+    resource1.should eq resource2
+
+    # it should not return a closed resource to the pool
+    resource2.expire!
     pool.release resource2
 
     resource2 = pool.checkout
